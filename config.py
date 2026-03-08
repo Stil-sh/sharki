@@ -13,8 +13,7 @@ DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://user:password@localhost:5
 
 # ── Сервер ─────────────────────────────────────────────────────────────────────
 PORT       = int(os.getenv('PORT', 8080))
-# Публичный домен Railway — используется для формирования subscription URL
-PUBLIC_URL = os.getenv('PUBLIC_URL', 'https://worker-production-f472.up.railway.app')
+PUBLIC_URL = 'https://worker-production-f472.up.railway.app'
 
 # ── Тарифы ─────────────────────────────────────────────────────────────────────
 TARIFFS = {
