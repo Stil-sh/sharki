@@ -49,6 +49,22 @@ async def create_tables():
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         ''')
+        # Миграция: добавляем token если его ещё нет (для старых БД)
+        await conn.execute('''
+            ALTER TABLE subscriptions
+            ADD COLUMN IF NOT EXISTS token TEXT;
+        ''')
+        await conn.execute('''
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'subscriptions_token_key'
+                ) THEN
+                    ALTER TABLE subscriptions
+                    ADD CONSTRAINT subscriptions_token_key UNIQUE (token);
+                END IF;
+            END $$;
+        ''')
     logger.info('Таблицы созданы.')
 
 
