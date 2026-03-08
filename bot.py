@@ -1,6 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime, timezone, timedelta
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.dispatcher import FSMContext
@@ -13,35 +14,20 @@ import config
 import db
 from keyboards import (
     main_menu_kb, tariffs_kb, payment_confirm_kb,
-    admin_payment_kb, support_kb
+    admin_payment_kb, support_kb, happ_install_kb, subscription_kb
 )
-from utils import generate_vpn_key, format_subscription_status, notify_expiring_subscriptions
+from utils import format_subscription_status, notify_expiring_subscriptions
+from happ import generate_token, make_sub_url, handle_subscription
 
-# ── Логирование ───────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# ── Инициализация ─────────────────────────────────────────────────────────────
-bot      = Bot(token=config.BOT_TOKEN, parse_mode='Markdown')
-storage  = MemoryStorage()
-dp       = Dispatcher(bot, storage=storage)
-
-
-# ── FSM состояния ─────────────────────────────────────────────────────────────
-class PromoState(StatesGroup):
-    waiting_code = State()
-
-class BroadcastState(StatesGroup):
-    waiting_text = State()
-
-class PromoCreateState(StatesGroup):
-    waiting_data = State()
-
-class GiveSubState(StatesGroup):
-    waiting_data = State()
+bot     = Bot(token=config.BOT_TOKEN, parse_mode='Markdown')
+storage = MemoryStorage()
+dp      = Dispatcher(bot, storage=storage)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -67,22 +53,20 @@ async def cmd_start(message: types.Message):
         referrer_id
     )
 
-    name = message.from_user.first_name or 'друг'
-
-    # Сообщаем рефереру
     if referrer_id:
         try:
             await bot.send_message(
                 referrer_id,
-                f'🎉 По вашей реферальной ссылке зарегистрировался новый пользователь!\n'
-                f'Вы получаете скидку 10% на следующую покупку — просто упомяните это в чате поддержки.'
+                '🎉 По вашей реферальной ссылке зарегистрировался новый пользователь!\n'
+                'Свяжитесь с поддержкой для получения бонуса.'
             )
         except Exception:
             pass
 
+    name = message.from_user.first_name or 'друг'
     await message.answer(
         f'🦈 *Привет, {name}! Добро пожаловать в SHARKIVPN!*\n\n'
-        f'Мы обеспечиваем быстрый и надёжный VPN для России и СНГ.\n\n'
+        f'Быстрый и надёжный VPN для России и СНГ.\n\n'
         f'🔒 Без логов · ⚡ Высокая скорость · 🌍 30+ серверов\n\n'
         f'Выберите нужный пункт меню:',
         reply_markup=main_menu_kb()
@@ -90,7 +74,7 @@ async def cmd_start(message: types.Message):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#   ПОКУПКА ПОДПИСКИ
+#   ПОКУПКА
 # ═════════════════════════════════════════════════════════════════════════════
 
 @dp.message_handler(Text(equals='💰 Купить подписку'))
@@ -117,18 +101,16 @@ async def callback_buy_tariff(call: types.CallbackQuery):
     amount     = tariff['price']
     payment_id = await db.create_payment(user_id, tariff_key, amount)
 
-    text = (
+    await call.message.answer(
         f'💳 *Оплата тарифа «{tariff["name"]}»*\n\n'
         f'Сумма: *{amount}₽*\n\n'
-        f'Переведите точную сумму на карту:\n'
+        f'Переведите на карту:\n'
         f'`{config.PAYMENT_CARD}`\n'
-        f'Банк: {config.PAYMENT_BANK}\n'
-        f'Получатель: {config.PAYMENT_NAME}\n\n'
-        f'⚠️ В комментарии к переводу укажите ваш ID: `{user_id}`\n\n'
-        f'После оплаты нажмите кнопку ниже — администратор проверит платёж '
-        f'и выдаст ключ в течение нескольких минут.'
+        f'Банк: {config.PAYMENT_BANK} · Получатель: {config.PAYMENT_NAME}\n\n'
+        f'⚠️ В комментарии укажите ваш ID: `{user_id}`\n\n'
+        f'После оплаты нажмите кнопку ниже — подписка придёт в течение нескольких минут.',
+        reply_markup=payment_confirm_kb(payment_id)
     )
-    await call.message.answer(text, reply_markup=payment_confirm_kb(payment_id))
     await call.answer()
 
 
@@ -148,11 +130,10 @@ async def callback_paid(call: types.CallbackQuery):
     name   = (user['first_name'] or '') if user else ''
     uname  = ('@' + user['username']) if (user and user['username']) else str(call.from_user.id)
 
-    # Уведомляем администратора
     await bot.send_message(
         config.ADMIN_CHAT_ID,
         f'🔔 *Новая заявка на оплату!*\n\n'
-        f'👤 Пользователь: {name} {uname}\n'
+        f'👤 {name} {uname}\n'
         f'🆔 ID: `{call.from_user.id}`\n'
         f'📦 Тариф: {tariff.get("name", payment["tariff"])}\n'
         f'💰 Сумма: {payment["amount"]}₽\n'
@@ -163,7 +144,7 @@ async def callback_paid(call: types.CallbackQuery):
     await call.message.edit_reply_markup()
     await call.message.answer(
         '✅ *Заявка отправлена администратору!*\n\n'
-        'Ключ будет выдан после проверки платежа. Обычно это занимает до 10 минут.'
+        'Подписка будет выдана после проверки. Обычно до 10 минут.'
     )
     await call.answer()
 
@@ -173,12 +154,48 @@ async def callback_cancel_payment(call: types.CallbackQuery):
     payment_id = int(call.data.split(':')[1])
     await db.update_payment_status(payment_id, 'cancelled')
     await call.message.edit_reply_markup()
-    await call.message.answer('❌ Оплата отменена. Вы можете начать заново.')
+    await call.message.answer('❌ Оплата отменена.')
     await call.answer()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#   АДМИН: ПОДТВЕРЖДЕНИЕ / ОТКЛОНЕНИЕ ПЛАТЕЖА
+#   ВЫДАЧА ПОДПИСКИ (общая функция)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def _deliver_subscription(user_id: int, tariff_key: str, end_date):
+    """
+    Создаёт подписку в БД, генерирует уникальный токен,
+    формирует subscription URL и отправляет пользователю.
+    """
+    token   = generate_token()
+    sub_url = make_sub_url(token)
+
+    await db.create_subscription(user_id, token, tariff_key, end_date)
+
+    tariff      = config.TARIFFS.get(tariff_key, {})
+    tariff_name = tariff.get('name', tariff_key)
+    period_text = f'до *{end_date.strftime("%d.%m.%Y")}*' if end_date else '*навсегда* 🔥'
+
+    await bot.send_message(
+        user_id,
+        f'🎉 *Подписка активирована!*\n\n'
+        f'📦 Тариф: *{tariff_name}*\n'
+        f'⏳ Действует {period_text}\n\n'
+        f'*Как подключиться:*\n'
+        f'1️⃣ Установите Happ (кнопки ниже)\n'
+        f'2️⃣ Нажмите «📲 Добавить подписку в Happ»\n'
+        f'3️⃣ Happ автоматически загрузит все серверы '
+        f'и покажет дату окончания подписки\n\n'
+        f'🔄 Серверы обновляются в Happ автоматически каждые 24ч.\n\n'
+        f'❓ Если кнопка не открывается — скопируйте ссылку вручную:\n'
+        f'`{sub_url}`',
+        reply_markup=subscription_kb(sub_url)
+    )
+    logger.info('Подписка выдана пользователю %s, токен %s', user_id, token)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#   АДМИН: подтверждение / отклонение платежа
 # ═════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query_handler(lambda c: c.data.startswith('adm_confirm:'))
@@ -199,35 +216,21 @@ async def admin_confirm(call: types.CallbackQuery):
     tariff_key = payment['tariff']
     tariff     = config.TARIFFS.get(tariff_key, {})
     days       = tariff.get('days')
-
-    vpn_key  = generate_vpn_key()
-    end_date = None
+    end_date   = None
     if days is not None:
         end_date = datetime.now(timezone.utc) + timedelta(days=days)
 
-    await db.create_subscription(user_id, vpn_key, tariff_key, end_date)
     await db.update_payment_status(payment_id, 'paid')
 
-    period_text = f'до *{end_date.strftime("%d.%m.%Y")}*' if end_date else '*навсегда* 🔥'
-
-    # Сообщаем пользователю
     try:
-        await bot.send_message(
-            user_id,
-            f'🎉 *Оплата подтверждена!*\n\n'
-            f'Тариф: *{tariff.get("name", tariff_key)}*\n'
-            f'Подписка активна {period_text}\n\n'
-            f'🔑 *Ваш VPN-ключ:*\n`{vpn_key}`\n\n'
-            f'Вставьте ключ в приложение SHARKIVPN и наслаждайтесь свободным интернетом! 🦈\n\n'
-            f'📖 Нажмите «Инструкция» если нужна помощь с подключением.'
-        )
+        await _deliver_subscription(user_id, tariff_key, end_date)
     except Exception as e:
-        logger.error('Не удалось отправить ключ %s: %s', user_id, e)
+        logger.error('Ошибка выдачи подписки %s: %s', user_id, e)
+        await call.answer('⚠️ Ошибка выдачи, проверь логи.', show_alert=True)
+        return
 
-    await call.message.edit_text(
-        call.message.text + f'\n\n✅ *Подтверждено. Ключ выдан.*'
-    )
-    await call.answer('✅ Платёж подтверждён!')
+    await call.message.edit_text(call.message.text + '\n\n✅ *Подтверждено. Подписка выдана.*')
+    await call.answer('✅ Готово!')
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('adm_reject:'))
@@ -254,15 +257,15 @@ async def admin_reject(call: types.CallbackQuery):
         pass
 
     await call.message.edit_text(call.message.text + '\n\n❌ *Отклонено.*')
-    await call.answer('❌ Платёж отклонён.')
+    await call.answer('❌ Отклонено.')
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#   МОЙ КЛЮЧ / СТАТУС
+#   МОЯ ПОДПИСКА / СТАТУС
 # ═════════════════════════════════════════════════════════════════════════════
 
-@dp.message_handler(Text(equals='🔑 Мой ключ'))
-async def menu_key(message: types.Message):
+@dp.message_handler(Text(equals='📱 Моя подписка'))
+async def menu_my_subscription(message: types.Message):
     sub = await db.get_active_subscription(message.from_user.id)
     if sub is None:
         await message.answer(
@@ -270,9 +273,17 @@ async def menu_key(message: types.Message):
             'Нажмите «💰 Купить подписку».'
         )
         return
+
+    sub_url     = make_sub_url(sub['token'])
+    end_date    = sub['end_date']
+    period_text = f'до *{end_date.strftime("%d.%m.%Y")}*' if end_date else '*навсегда* 🔥'
+
     await message.answer(
-        f'🔑 *Ваш VPN-ключ:*\n\n`{sub["key"]}`\n\n'
-        f'Скопируйте ключ и вставьте в приложение SHARKIVPN.'
+        f'📱 *Ваша подписка SHARKIVPN*\n\n'
+        f'⏳ Действует {period_text}\n\n'
+        f'Нажмите кнопку для добавления/обновления в Happ.\n\n'
+        f'Ссылка подписки:\n`{sub_url}`',
+        reply_markup=subscription_kb(sub_url)
     )
 
 
@@ -284,44 +295,6 @@ async def menu_status(message: types.Message):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#   ПРОМОКОД
-# ═════════════════════════════════════════════════════════════════════════════
-
-@dp.message_handler(Text(equals='🎁 Промокод'))
-async def menu_promo(message: types.Message):
-    await message.answer(
-        '🎁 *Введите промокод:*\n\n'
-        'Отправьте код в следующем сообщении.'
-    )
-    await PromoState.waiting_code.set()
-
-
-@dp.message_handler(state=PromoState.waiting_code)
-async def process_promo(message: types.Message, state: FSMContext):
-    code  = message.text.strip().upper()
-    promo = await db.get_promo(code)
-
-    if not promo:
-        await message.answer(
-            '❌ *Промокод недействителен или уже использован.*\n'
-            'Попробуйте другой.'
-        )
-        await state.finish()
-        return
-
-    discount = promo['discount']
-    await db.use_promo(code)
-    await state.finish()
-
-    await message.answer(
-        f'✅ *Промокод активирован!*\n\n'
-        f'Скидка *{discount}%* на следующую покупку применена.\n\n'
-        f'Выберите тариф:',
-        reply_markup=tariffs_kb(discount=discount)
-    )
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 #   РЕФЕРАЛЬНАЯ ПРОГРАММА
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -330,16 +303,15 @@ async def menu_referral(message: types.Message):
     user_id  = message.from_user.id
     user     = await db.get_user(user_id)
     ref_cnt  = user['ref_count'] if user else 0
-    ref_link = f'https://t.me/{(await bot.get_me()).username}?start=ref_{user_id}'
+    bot_info = await bot.get_me()
+    ref_link = f'https://t.me/{bot_info.username}?start=ref_{user_id}'
 
     await message.answer(
         f'👥 *Реферальная программа SHARKIVPN*\n\n'
-        f'Приглашайте друзей и получайте бонусы!\n\n'
-        f'🔗 Ваша реферальная ссылка:\n`{ref_link}`\n\n'
-        f'👤 Приглашено друзей: *{ref_cnt}*\n\n'
-        f'🎁 За каждого нового пользователя по вашей ссылке\n'
-        f'вы получаете скидку 10% на следующую покупку.\n'
-        f'Свяжитесь с поддержкой для получения бонуса.',
+        f'🔗 Ваша ссылка:\n`{ref_link}`\n\n'
+        f'👤 Приглашено: *{ref_cnt}*\n\n'
+        f'За каждого нового пользователя — скидка 10% на следующую покупку.\n'
+        f'Свяжитесь с поддержкой для активации бонуса.',
         reply_markup=support_kb()
     )
 
@@ -352,7 +324,7 @@ async def menu_referral(message: types.Message):
 async def menu_support(message: types.Message):
     await message.answer(
         '🆘 *Поддержка SHARKIVPN*\n\n'
-        'Если у вас возникли проблемы — напишите нам, мы ответим в течение нескольких минут.',
+        'Напишите нам — ответим в течение нескольких минут.',
         reply_markup=support_kb()
     )
 
@@ -361,17 +333,15 @@ async def menu_support(message: types.Message):
 async def menu_instruction(message: types.Message):
     await message.answer(
         '📖 *Инструкция по подключению SHARKIVPN*\n\n'
-        '*1.* Оплатите подписку и получите ключ\n'
-        '*2.* Скачайте приложение:\n'
-        '   • Android: [Google Play](https://play.google.com)\n'
-        '   • iOS: [App Store](https://apps.apple.com)\n'
-        '   • Windows/Mac: наш сайт\n\n'
-        '*3.* Откройте приложение → «Добавить сервер»\n'
-        '*4.* Вставьте ваш ключ в поле ввода\n'
-        '*5.* Нажмите «Подключиться» ✅\n\n'
-        '❓ Если что-то не работает — обратитесь в поддержку.',
-        disable_web_page_preview=True,
-        reply_markup=support_kb()
+        '*1.* Оплатите подписку\n'
+        '*2.* Установите приложение *Happ*:\n\n'
+        '*3.* После подтверждения оплаты нажмите\n'
+        '«📲 Добавить подписку в Happ»\n\n'
+        'Happ автоматически загрузит все серверы и '
+        'покажет дату окончания подписки в интерфейсе.\n\n'
+        '🔄 Серверы обновляются автоматически каждые 24 часа.\n\n'
+        '❓ Проблемы? Напишите в поддержку.',
+        reply_markup=happ_install_kb()
     )
 
 
@@ -386,39 +356,32 @@ def is_admin(user_id: int) -> bool:
 @dp.message_handler(commands=['stats'])
 async def cmd_stats(message: types.Message):
     if not is_admin(message.from_user.id):
-        await message.answer('⛔ Нет доступа.')
         return
-
     s = await db.get_stats()
     lines = [
         '📊 *Статистика SHARKIVPN*\n',
-        f'👤 Всего пользователей: *{s["total"]}*',
+        f'👤 Всего: *{s["total"]}*',
         f'🆕 Новых за 24ч: *{s["new_today"]}*',
         f'✅ Активных подписок: *{s["active"]}*',
         f'⏳ Ожидают оплаты: *{s["pending"]}*',
-        f'💰 Общая выручка: *{s["revenue"]}₽*',
+        f'💰 Выручка: *{s["revenue"]}₽*',
     ]
     if s['by_tariff']:
         lines.append('\n📦 *По тарифам:*')
         for row in s['by_tariff']:
             t = config.TARIFFS.get(row['tariff'], {})
             lines.append(f'  • {t.get("name", row["tariff"])}: {row["cnt"]} шт.')
-
     await message.answer('\n'.join(lines))
 
 
 @dp.message_handler(commands=['pending'])
 async def cmd_pending(message: types.Message):
-    """Список ожидающих платежей."""
     if not is_admin(message.from_user.id):
-        await message.answer('⛔ Нет доступа.')
         return
-
     payments = await db.get_pending_payments()
     if not payments:
         await message.answer('✅ Ожидающих платежей нет.')
         return
-
     for p in payments:
         t     = config.TARIFFS.get(p['tariff'], {})
         name  = p['first_name'] or ''
@@ -434,19 +397,12 @@ async def cmd_pending(message: types.Message):
 
 @dp.message_handler(commands=['give'])
 async def cmd_give(message: types.Message):
-    """Выдать подписку вручную. /give <user_id> <tariff_key>"""
     if not is_admin(message.from_user.id):
-        await message.answer('⛔ Нет доступа.')
         return
-
     args = message.get_args().split()
     if len(args) < 2:
-        await message.answer(
-            'Использование: `/give <user_id> <tariff_key>`\n'
-            'Тарифы: `1m`, `3m`, `forever`'
-        )
+        await message.answer('Использование: `/give <user_id> <tariff>`\nТарифы: `1m` `3m` `forever`')
         return
-
     try:
         uid        = int(args[0])
         tariff_key = args[1]
@@ -454,60 +410,25 @@ async def cmd_give(message: types.Message):
         if not tariff:
             await message.answer(f'Неизвестный тариф: {tariff_key}')
             return
-
         days     = tariff['days']
-        vpn_key  = generate_vpn_key()
         end_date = None
         if days is not None:
             end_date = datetime.now(timezone.utc) + timedelta(days=days)
-
-        await db.create_subscription(uid, vpn_key, tariff_key, end_date)
+        await _deliver_subscription(uid, tariff_key, end_date)
         period = f'до {end_date.strftime("%d.%m.%Y")}' if end_date else 'навсегда'
-
-        await message.answer(f'✅ Подписка выдана пользователю `{uid}` ({period}).\nКлюч: `{vpn_key}`')
-
-        try:
-            await bot.send_message(
-                uid,
-                f'🎁 *Вам выдана подписка SHARKIVPN!*\n\n'
-                f'Тариф: *{tariff["name"]}*\n\n'
-                f'🔑 *Ваш ключ:*\n`{vpn_key}`'
-            )
-        except Exception:
-            pass
-
+        await message.answer(f'✅ Подписка выдана `{uid}` ({period}).')
     except Exception as e:
         await message.answer(f'Ошибка: {e}')
-
-
-@dp.message_handler(commands=['addpromo'])
-async def cmd_addpromo(message: types.Message):
-    """Создать промокод. /addpromo <CODE> <скидка%> <кол-во использований>"""
-    if not is_admin(message.from_user.id):
-        await message.answer('⛔ Нет доступа.')
-        return
-
-    args = message.get_args().split()
-    if len(args) < 3:
-        await message.answer('Использование: `/addpromo CODE 20 100`\n(код, скидка%, макс.исп.)')
-        return
-
-    code, discount, max_uses = args[0].upper(), int(args[1]), int(args[2])
-    await db.create_promo(code, discount, max_uses)
-    await message.answer(f'✅ Промокод `{code}` создан.\nСкидка: {discount}%, использований: {max_uses}')
 
 
 @dp.message_handler(commands=['broadcast'])
 async def cmd_broadcast(message: types.Message):
     if not is_admin(message.from_user.id):
-        await message.answer('⛔ Нет доступа.')
         return
-
     text = message.get_args()
     if not text:
-        await message.answer('Использование: `/broadcast Текст сообщения`')
+        await message.answer('Использование: `/broadcast Текст`')
         return
-
     await message.answer('📤 Начинаю рассылку...')
     user_ids   = await db.get_all_user_ids()
     sent, fail = 0, 0
@@ -515,11 +436,10 @@ async def cmd_broadcast(message: types.Message):
         try:
             await bot.send_message(uid, f'📢 *Объявление SHARKIVPN*\n\n{text}')
             sent += 1
-            await asyncio.sleep(0.05)  # Антифлуд
+            await asyncio.sleep(0.05)
         except Exception:
             fail += 1
-
-    await message.answer(f'✅ Рассылка завершена.\nОтправлено: {sent}\nОшибок: {fail}')
+    await message.answer(f'✅ Рассылка: {sent} отправлено, {fail} ошибок.')
 
 
 @dp.message_handler(commands=['help'])
@@ -530,39 +450,45 @@ async def cmd_help(message: types.Message):
         '🛠 *Команды администратора:*\n\n'
         '/stats — статистика\n'
         '/pending — ожидающие платежи\n'
-        '/give `<user_id> <tariff>` — выдать подписку вручную\n'
-        '/addpromo `<CODE> <скидка> <макс>` — создать промокод\n'
-        '/broadcast `<текст>` — рассылка всем\n'
+        '/give `<user_id> <tariff>` — выдать подписку\n'
+        '/broadcast `<текст>` — рассылка\n'
     )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#   ЗАПУСК
+#   ЗАПУСК: aiohttp-сервер + планировщик
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def on_startup(dispatcher):
     await db.init_db()
 
+    # aiohttp-сервер для subscription endpoint
+    app = web.Application()
+    app.router.add_get('/sub/{token}', handle_subscription)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', config.PORT)
+    await site.start()
+    logger.info('HTTP-сервер запущен на порту %s', config.PORT)
+
+    # Планировщик уведомлений об истечении
     scheduler = AsyncIOScheduler(timezone='Europe/Moscow')
     scheduler.add_job(
         notify_expiring_subscriptions,
-        'cron', hour=10, minute=0,
-        args=[bot]
+        'cron', hour=10, minute=0, args=[bot]
     )
     scheduler.start()
-    logger.info('Планировщик запущен.')
 
-    # Уведомляем администратора о запуске
     try:
         await bot.send_message(
             config.ADMIN_CHAT_ID,
-            '🟢 *SHARKIVPN бот запущен!*\n'
-            'Все системы работают нормально.\n'
-            'Введите /help для списка команд.'
+            f'🟢 *SHARKIVPN бот запущен!*\n'
+            f'Subscription endpoint: `{config.PUBLIC_URL}/sub/<token>`\n'
+            f'/help — список команд.'
         )
     except Exception:
         pass
-
     logger.info('SHARKIVPN бот запущен!')
 
 

@@ -2,27 +2,22 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
-from config import SUPPORT_URL, TARIFFS
+from config import SUPPORT_URL, TARIFFS, HAPP_URL_ANDROID, HAPP_URL_IOS
 
 
 def main_menu_kb() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(KeyboardButton('💰 Купить подписку'))
-    kb.add(KeyboardButton('🔑 Мой ключ'), KeyboardButton('📅 Статус подписки'))
-    kb.add(KeyboardButton('👥 Реферальная программа'), KeyboardButton('🎁 Промокод'))
+    kb.add(KeyboardButton('📱 Моя подписка'), KeyboardButton('📅 Статус подписки'))
+    kb.add(KeyboardButton('👥 Реферальная программа'))
     kb.add(KeyboardButton('🆘 Поддержка'), KeyboardButton('📖 Инструкция'))
     return kb
 
 
-def tariffs_kb(discount: int = 0) -> InlineKeyboardMarkup:
+def tariffs_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
     for key, t in TARIFFS.items():
-        price = t['price']
-        if discount:
-            discounted = int(price * (100 - discount) / 100)
-            label = f'{t["name"]} — ~~{price}₽~~ {discounted}₽ (-{discount}%)'
-        else:
-            label = f'{t["name"]} — {price}₽'
+        label = f'{t["name"]} — {t["price"]}₽'
         kb.add(InlineKeyboardButton(label, callback_data=f'buy:{key}'))
     return kb
 
@@ -48,4 +43,29 @@ def admin_payment_kb(payment_id: int, user_id: int) -> InlineKeyboardMarkup:
 def support_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton('🆘 Написать в поддержку', url=SUPPORT_URL))
+    return kb
+
+
+def happ_install_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton('🤖 Android', url=HAPP_URL_ANDROID),
+        InlineKeyboardButton('🍎 iOS',     url=HAPP_URL_IOS),
+    )
+    return kb
+
+
+def subscription_kb(sub_url: str) -> InlineKeyboardMarkup:
+    """
+    Кнопка импорта подписки в Happ.
+    happ://import?url=... — deep link, открывает Happ и добавляет подписку.
+    """
+    from urllib.parse import quote
+    happ_deeplink = f'happ://import?url={quote(sub_url, safe="")}'
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton('📲 Добавить подписку в Happ', url=happ_deeplink))
+    kb.add(
+        InlineKeyboardButton('🤖 Скачать Happ Android', url=HAPP_URL_ANDROID),
+        InlineKeyboardButton('🍎 Скачать Happ iOS',     url=HAPP_URL_IOS),
+    )
     return kb
