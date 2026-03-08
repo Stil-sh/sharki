@@ -183,13 +183,12 @@ async def _deliver_subscription(user_id: int, tariff_key: str, end_date):
         f'⏳ Действует {period_text}\n\n'
         f'*Как подключиться:*\n'
         f'1️⃣ Установите Happ (кнопки ниже)\n'
-        f'2️⃣ Нажмите «📲 Добавить подписку в Happ»\n'
-        f'3️⃣ Happ автоматически загрузит все серверы '
-        f'и покажет дату окончания подписки\n\n'
-        f'🔄 Серверы обновляются в Happ автоматически каждые 24ч.\n\n'
-        f'❓ Если кнопка не открывается — скопируйте ссылку вручную:\n'
-        f'`{sub_url}`',
-        reply_markup=subscription_kb(sub_url)
+        f'2️⃣ Откройте Happ → + → Добавить подписку\n'
+        f'3️⃣ Вставьте ссылку подписки:\n'
+        f'`{sub_url}`\n\n'
+        f'Happ загрузит все серверы и покажет дату окончания подписки.\n'
+        f'🔄 Серверы обновляются автоматически каждые 24ч.',
+        reply_markup=subscription_kb()
     )
     logger.info('Подписка выдана пользователю %s, токен %s', user_id, token)
 
@@ -281,9 +280,10 @@ async def menu_my_subscription(message: types.Message):
     await message.answer(
         f'📱 *Ваша подписка SHARKIVPN*\n\n'
         f'⏳ Действует {period_text}\n\n'
-        f'Нажмите кнопку для добавления/обновления в Happ.\n\n'
-        f'Ссылка подписки:\n`{sub_url}`',
-        reply_markup=subscription_kb(sub_url)
+        f'*Ссылка подписки для Happ:*\n'
+        f'`{sub_url}`\n\n'
+        f'Happ → + → Добавить подписку → вставьте ссылку выше.',
+        reply_markup=subscription_kb()
     )
 
 

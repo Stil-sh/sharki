@@ -55,17 +55,11 @@ def happ_install_kb() -> InlineKeyboardMarkup:
     return kb
 
 
-def subscription_kb(sub_url: str) -> InlineKeyboardMarkup:
-    """
-    Кнопка импорта подписки в Happ.
-    happ://import?url=... — deep link, открывает Happ и добавляет подписку.
-    """
-    from urllib.parse import quote
-    happ_deeplink = f'happ://import?url={quote(sub_url, safe="")}'
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton('📲 Добавить подписку в Happ', url=happ_deeplink))
+def subscription_kb() -> InlineKeyboardMarkup:
+    """Кнопки установки Happ — ссылка на подписку отправляется текстом."""
+    kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton('🤖 Скачать Happ Android', url=HAPP_URL_ANDROID),
-        InlineKeyboardButton('🍎 Скачать Happ iOS',     url=HAPP_URL_IOS),
+        InlineKeyboardButton('🤖 Happ Android', url=HAPP_URL_ANDROID),
+        InlineKeyboardButton('🍎 Happ iOS',     url=HAPP_URL_IOS),
     )
     return kb
