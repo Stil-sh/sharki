@@ -49,6 +49,17 @@ async def create_tables():
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         ''')
+        # Миграция: убираем NOT NULL со старой колонки key
+        await conn.execute('''
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='subscriptions' AND column_name='key'
+                ) THEN
+                    ALTER TABLE subscriptions ALTER COLUMN key DROP NOT NULL;
+                END IF;
+            END $$;
+        ''')
         # Миграция: добавляем token если его ещё нет (для старых БД)
         await conn.execute('''
             ALTER TABLE subscriptions
